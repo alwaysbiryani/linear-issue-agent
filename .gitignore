@@ -10,3 +10,6 @@ Thumbs.db
 
 # Per-repo config (contains project-specific settings)
 .agents/config/
+
+# Agent state files (per-machine, session-specific)
+.agents/state/

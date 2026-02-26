@@ -16,17 +16,18 @@ description: >
 
 1. [Prerequisites](#prerequisites)
 2. [Configuration](#configuration)
-3. [Agent Lifecycle](#agent-lifecycle)
-4. [Phase 0: Initialization](#phase-0-initialization)
-5. [Phase 1: Issue Discovery](#phase-1-issue-discovery)
-6. [Phase 2: Planning](#phase-2-planning)
-7. [Phase 3: Implementation](#phase-3-implementation)
-8. [Phase 4: Quality Gate](#phase-4-quality-gate)
-9. [Phase 5: Ready for Review](#phase-5-ready-for-review)
-10. [Phase 6: Deployment](#phase-6-deployment)
-11. [Phase 7: Closure](#phase-7-closure)
-12. [Error Handling](#error-handling)
-13. [Transparency Rules](#transparency-rules)
+3. [State Management & Session Continuity](#state-management--session-continuity)
+4. [Agent Lifecycle](#agent-lifecycle)
+5. [Phase 0: Initialization](#phase-0-initialization)
+6. [Phase 1: Issue Discovery](#phase-1-issue-discovery)
+7. [Phase 2: Planning](#phase-2-planning)
+8. [Phase 3: Implementation](#phase-3-implementation)
+9. [Phase 4: Quality Gate](#phase-4-quality-gate)
+10. [Phase 5: Ready for Review](#phase-5-ready-for-review)
+11. [Phase 6: Deployment](#phase-6-deployment)
+12. [Phase 7: Closure](#phase-7-closure)
+13. [Error Handling](#error-handling)
+14. [Transparency Rules](#transparency-rules)
 
 ---
 
@@ -110,6 +111,187 @@ deployment:
 
 ---
 
+## State Management & Session Continuity
+
+> **Core Principle**: The agent must be able to stop at any point and resume in a completely new session — even with zero prior context — by reading state files from disk.
+
+### Why This Matters
+
+- **Context window limits**: Long sessions fill up the AI context; state files keep things lean.
+- **Session breaks**: User closes IDE, takes a break, switches machines — state survives on disk.
+- **Multiple issues**: Each issue has its own isolated state file — no cross-contamination.
+- **Crash recovery**: If the agent or IDE crashes mid-phase, progress is not lost.
+
+### State Directory
+
+All state files live in:
+```
+.agents/state/linear-agent/
+├── _active.yml              # Points to the currently active issue (if any)
+├── lin-42.yml               # State for LIN-42
+├── lin-58.yml               # State for LIN-58
+└── lin-61.yml               # State for LIN-61 (completed)
+```
+
+### State File Schema
+
+Each issue gets a YAML state file (named `{issue-id-lowercase}.yml`):
+
+```yaml
+# .agents/state/linear-agent/lin-42.yml
+
+# ─── Issue Identity ───────────────────────────────────────────────
+issue_id: "LIN-42"
+issue_title: "Fix login page crash"
+issue_url: "https://linear.app/team/issue/LIN-42"
+linear_issue_uuid: "abc-123-def"  # Internal Linear UUID
+
+# ─── Progress Tracking ───────────────────────────────────────────
+current_phase: 3               # 0-7, which phase we're in
+phase_status: "in_progress"    # not_started | in_progress | completed | blocked
+last_updated: "2026-02-26T23:30:00+05:30"
+started_at: "2026-02-26T22:00:00+05:30"
+
+# ─── Phase Completion Log ────────────────────────────────────────
+phases_completed:
+  - phase: 0
+    completed_at: "2026-02-26T22:01:00+05:30"
+    notes: "Config loaded, repo synced to main"
+  - phase: 1
+    completed_at: "2026-02-26T22:02:00+05:30"
+    notes: "Auto-picked LIN-42 (Urgent priority)"
+  - phase: 2
+    completed_at: "2026-02-26T22:10:00+05:30"
+    notes: "Plan created — 3 files to modify"
+
+# ─── Git Context ─────────────────────────────────────────────────
+branch_name: "feature/lin-42-fix-login-page-crash"
+base_branch: "main"
+commits:
+  - hash: "a1b2c3d"
+    message: "fix(auth): handle null session token"
+  - hash: "e4f5g6h"
+    message: "test(auth): add login crash regression test"
+
+# ─── Files Modified ──────────────────────────────────────────────
+files_modified:
+  - path: "src/auth/login.ts"
+    change: "Added null check for session token"
+  - path: "tests/auth/login.test.ts"
+    change: "Added regression test for crash scenario"
+
+# ─── Implementation Context ─────────────────────────────────────
+# Key decisions, approach taken, and important context that helps
+# a fresh session understand what's been done and what's left.
+context: |
+  The crash was caused by a null session token when the OAuth
+  provider returns an error. Added defensive null checks in the
+  login flow and a try-catch wrapper around the token exchange.
+  
+  Still need to: update the error UI to show a user-friendly message
+  instead of a blank screen.
+
+# ─── What's Left (for current phase) ────────────────────────────
+remaining_work:
+  - "Update error boundary UI in LoginPage component"
+  - "Run full test suite"
+
+# ─── Blockers / Questions ────────────────────────────────────────
+blockers: []
+  # - "Need clarification on error message copy from design team"
+
+# ─── PR & Deployment (filled in Phases 5-7) ──────────────────────
+pr_url: ""
+pr_number: ""
+preview_url: ""
+screenshots: []
+
+# ─── Learnings (filled in Phase 7) ───────────────────────────────
+learnings: ""
+```
+
+### Active Issue Pointer
+
+The `_active.yml` file tracks which issue is currently being worked on:
+
+```yaml
+# .agents/state/linear-agent/_active.yml
+active_issue: "lin-42"
+started_at: "2026-02-26T22:00:00+05:30"
+```
+
+If no issue is active, the file is empty or absent.
+
+### State Persistence Rules
+
+> **CRITICAL**: These rules MUST be followed at all times.
+
+1. **Write state after EVERY phase completion**: When a phase finishes, update the state file immediately.
+2. **Write state after EVERY significant action**: After commits, file changes, or key decisions — update the state.
+3. **Write remaining_work BEFORE starting work**: Before implementing, list what needs to be done. Cross off items as they're completed.
+4. **Write context continuously**: After making key decisions or taking non-obvious approaches, update the `context` field.
+5. **Never rely on conversation memory alone**: Anything important must be in the state file.
+6. **State file is the single source of truth**: If there's a conflict between conversation memory and the state file, the state file wins.
+
+### Resume Protocol
+
+When the agent starts (Phase 0), it MUST check for existing state:
+
+1. **Check for `_active.yml`**:
+   - If it exists and points to an issue → **resume that issue**.
+   - If it doesn't exist → proceed to Phase 1 (fresh start).
+
+2. **When resuming**, read the state file and:
+   - **Tell the user**: 
+     > "🔄 **Resuming work on {issue_id}: {title}**
+     > 
+     > Last session ended at Phase {N} ({phase_status}).
+     > Here's where we left off: {context summary}
+     > 
+     > Remaining work:
+     > - {item 1}
+     > - {item 2}
+     > 
+     > Shall I continue, or would you like to do something else?"
+   - Checkout the correct branch.
+   - Pick up from where `current_phase` and `remaining_work` indicate.
+
+3. **When resuming mid-phase**:
+   - Read `remaining_work` to know what's left.
+   - Read `context` to understand decisions already made.
+   - Read `files_modified` to know what's already been changed.
+   - Read `commits` to know what's already been committed.
+   - **Do NOT redo completed work**.
+
+### Session Handoff
+
+If the user needs to end a session mid-work:
+
+1. **Save everything to state**:
+   - Current phase and status
+   - All remaining work items
+   - Detailed context of approach and decisions
+   - Any uncommitted changes (note in `remaining_work`)
+2. **Commit any WIP** (if there are uncommitted changes):
+   ```bash
+   git add -A
+   git commit -m "wip({scope}): {what's in progress}
+
+   Refs: {issue_id}"
+   ```
+3. **Tell the user**:
+   > "💾 **Session saved!** State file updated at `.agents/state/linear-agent/{issue_id}.yml`
+   >
+   > Next time you run `/linear-agent`, I'll pick up right where we left off."
+
+### State File Maintenance
+
+- **Completed issues**: Keep state files for completed issues (they serve as a log). Mark `phase_status: completed`.
+- **Cancelled issues**: Mark `phase_status: cancelled` with a note in `context`.
+- **Cleaning up**: The user can delete old state files manually if the directory gets large.
+
+---
+
 ## Agent Lifecycle
 
 ```
@@ -138,7 +320,7 @@ deployment:
 
 ## Phase 0: Initialization
 
-**Goal**: Set up the environment and validate everything is ready.
+**Goal**: Set up the environment, validate everything is ready, and check for resumed work.
 
 ### Steps
 
@@ -151,7 +333,16 @@ deployment:
    - Run `git remote -v` — must have a GitHub remote.
    - Test Linear MCP connectivity: call `list_teams`.
 
-3. **Detect Base Branch**
+3. **🔄 Check for Resumed Work** _(State Management)_
+   - Check if `.agents/state/linear-agent/_active.yml` exists.
+   - If it does:
+     - Read the active issue ID.
+     - Read the corresponding state file.
+     - Follow the **Resume Protocol** (see State Management section).
+     - **Skip to the appropriate phase** based on `current_phase`.
+   - If it doesn't: proceed normally (fresh start).
+
+4. **Detect Base Branch**
    - If `base_branch` is not set in config:
      ```bash
      git symbolic-ref refs/remotes/origin/HEAD | sed 's@^refs/remotes/origin/@@'
@@ -159,7 +350,7 @@ deployment:
    - Fallback: check for `main`, then `master`.
    - **Tell the user**: "📋 Detected base branch: `{branch}`"
 
-4. **Sync Local Repo**
+5. **Sync Local Repo**
    ```bash
    git fetch origin
    git checkout {base_branch}
@@ -167,7 +358,7 @@ deployment:
    ```
    - **Tell the user**: "✅ Repo synced to latest `{base_branch}`"
 
-5. **Fetch Linear Project Info**
+6. **Fetch Linear Project Info**
    - Call `get_project` with the configured project name.
    - Store the project ID for subsequent calls.
    - **Tell the user**: "🔗 Connected to Linear project: **{project_name}**"
@@ -209,6 +400,11 @@ deployment:
      - Set state to **"In Progress"**
      - Assign to **"me"** (the authenticated user)
    - **Tell the user**: "🚀 Starting work on **{issue_id}: {title}** — marked as In Progress"
+
+5. **📝 Create State File** _(State Management)_
+   - Create `.agents/state/linear-agent/{issue_id_lowercase}.yml` with initial values.
+   - Create/update `.agents/state/linear-agent/_active.yml` to point to this issue.
+   - Set `current_phase: 1`, `phase_status: completed`.
 
 ---
 
@@ -279,6 +475,11 @@ deployment:
 6. **Tell the user**:
    > "📝 I've analyzed the issue and created an implementation plan. Here's what I'm thinking: {brief summary}. The full plan is in the artifact. Proceeding to implementation."
 
+7. **📝 Update State File** _(State Management)_
+   - Update `current_phase: 2`, `phase_status: completed`.
+   - Write `remaining_work` with all implementation steps from the plan.
+   - Write `context` with the approach summary and key decisions.
+
 ---
 
 ## Phase 3: Implementation
@@ -321,6 +522,14 @@ deployment:
    - If you hit an unexpected issue: **stop and explain**, ask for guidance
    - If you deviate from the plan: **explain why**
    - Show relevant code snippets when helpful
+
+5. **📝 Update State File Continuously** _(State Management)_
+   - After **every commit**: update `commits` list in state file.
+   - After **every file change**: update `files_modified` list.
+   - After **every completed task**: remove from `remaining_work`.
+   - After **key decisions**: update `context` with reasoning.
+   - Keep `current_phase: 3`, `phase_status: in_progress`.
+   - On phase completion: set `phase_status: completed`.
 
 ---
 
@@ -367,6 +576,10 @@ deployment:
      ├── Tests:  ✅ 24/24 passed
      └── Build:  ✅ Successful
      ```
+
+5. **📝 Update State File** _(State Management)_
+   - Update `current_phase: 4`, `phase_status: completed`.
+   - Note quality results in `context`.
 
 ---
 
@@ -474,6 +687,11 @@ deployment:
    - **Approved**: Proceed to Phase 6.
    - **Changes needed**: Go back to Phase 3, apply requested changes, re-run Phase 4, return here.
    - **Cancel**: Move issue back to "Todo", delete branch, notify on Linear.
+
+8. **📝 Update State File** _(State Management)_
+   - Update `current_phase: 5`, `phase_status: completed` (or `waiting_approval`).
+   - Record `pr_url`, `pr_number` in state file.
+   - If changes requested: set `phase_status: changes_requested`, update `remaining_work`.
 
 ---
 
@@ -595,6 +813,12 @@ deployment:
      git checkout {base_branch}
      git pull origin {base_branch}
      ```
+
+6. **📝 Finalize State File** _(State Management)_
+   - Update `current_phase: 7`, `phase_status: completed`.
+   - Record `learnings`, final `screenshots`, `preview_url`.
+   - Clear `_active.yml` (remove or empty it) — no active issue.
+   - The state file for this issue is kept as a **historical log**.
 
 6. **Report to User**
    - **Tell the user**:
