@@ -1,0 +1,79 @@
+# ==============================================================================
+# Linear Issue Agent — Per-Repository Configuration
+# ==============================================================================
+#
+# Copy this file to your repo at: .agents/config/linear-agent.yml
+# Fill in the REQUIRED fields. Optional fields have sensible defaults.
+#
+# ==============================================================================
+
+# ─── REQUIRED ─────────────────────────────────────────────────────────────────
+
+# Linear project name, slug, or ID
+# Find this in your Linear project settings or URL
+linear_project: ""
+
+# Linear team name or key (e.g., "Engineering" or "ENG")
+linear_team: ""
+
+# ─── GIT & BRANCHING ─────────────────────────────────────────────────────────
+
+# Base branch for feature branches (leave empty to auto-detect)
+# Common values: "main", "master", "develop"
+base_branch: ""
+
+# Branch prefix pattern (the issue ID and title slug are appended automatically)
+# Example: "feature/" produces branches like "feature/lin-42-fix-login"
+branch_prefix: "feature/"
+
+# ─── COMMANDS ─────────────────────────────────────────────────────────────────
+
+# Dev server command (for local testing during review)
+# Examples: "npm run dev", "flutter run", "python manage.py runserver"
+dev_command: ""
+
+# Dev server port (used for local testing URLs)
+dev_port: 3000
+
+# Build/compile command (run as quality gate before PR)
+# Examples: "npm run build", "flutter build", "cargo build"
+build_command: ""
+
+# Test command (run as quality gate before PR)
+# Examples: "npm test", "flutter test", "pytest", "cargo test"
+test_command: ""
+
+# Lint/format command (run as quality gate before PR)
+# Examples: "npm run lint", "flutter analyze", "ruff check ."
+lint_command: ""
+
+# ─── ISSUE SELECTION ──────────────────────────────────────────────────────────
+
+# Priority order for auto-picking issues
+# 1=Urgent, 2=High, 3=Normal, 4=Low, 0=None
+priority_order: [1, 2, 3, 4, 0]
+
+# ─── DEPLOYMENT ───────────────────────────────────────────────────────────────
+
+# Deployment platform
+# Options: "vercel", "netlify", "github-pages", "firebase", "custom", "none"
+deployment:
+  platform: "none"
+
+  # Preview URL pattern for branch deployments (optional)
+  # Use {branch} as placeholder for the branch name
+  # Example: "https://{branch}--my-app.netlify.app"
+  preview_url_pattern: ""
+
+# ─── LINEAR STATUSES ──────────────────────────────────────────────────────────
+# Map agent phases to your Linear workflow statuses.
+# Leave empty to auto-detect from your team's workflow.
+#
+# The agent will use list_issue_statuses to find the closest match
+# if these are not specified.
+
+statuses:
+  todo: ""           # e.g., "Todo", "To Do", "Backlog"
+  in_progress: ""    # e.g., "In Progress", "Doing"
+  in_review: ""      # e.g., "In Review", "Ready for Testing", "QA"
+  done: ""           # e.g., "Done", "Closed", "Complete"
