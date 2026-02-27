@@ -4,9 +4,17 @@ description: Run the Linear Issue Agent to pick up and work on To-Do issues from
 
 # Linear Issue Agent Workflow
 
+<!-- 
+  Platform Note: The directive below auto-approves safe terminal commands
+  without prompting. It is currently supported by Gemini-based IDEs only.
+  Other IDEs (Claude Code, Cursor, Windsurf) will safely ignore it —
+  you'll simply be prompted to approve each command manually.
+-->
 // turbo-all
 
 This workflow activates the **Linear Issue Agent** skill, which autonomously picks up To-Do issues from a configured Linear project, implements them, and deploys via GitHub PR.
+
+> **IDE Compatibility**: This workflow is tested with Gemini. For Claude Code, Cursor, or Windsurf, see the [Tool Mapping Table](#tool-mapping) in SKILL.md for capability equivalents.
 
 ## Steps
 

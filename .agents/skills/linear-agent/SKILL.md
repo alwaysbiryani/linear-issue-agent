@@ -57,6 +57,21 @@ git remote -v
 
 If any check fails, **stop and inform the user** before proceeding.
 
+### Tool Mapping (Multi-IDE Support) {#tool-mapping}
+
+This skill uses **capability-based** language for code exploration. Map to your IDE's tools:
+
+| Capability | Gemini | Claude Code | Cursor | Windsurf |
+|------------|--------|-------------|--------|----------|
+| **Search code for patterns** | `grep_search` | `Grep` | Search | Search |
+| **Discover files by name** | `find_by_name` | `Glob` | Files | Files |
+| **View file structure/outline** | `view_file_outline` | `Read` | Outline | Read |
+| **View file contents** | `view_file` | `Read` | Read | Read |
+| **Edit file** | `replace_file_content` | `Edit` | Edit | Edit |
+| **Run terminal command** | `run_command` | `Bash` | Terminal | Terminal |
+
+> **Note**: When this skill says "search for patterns in the codebase", "discover files matching…", or "view the file structure", use the equivalent tool from your IDE column above.
+
 ---
 
 ## Configuration
@@ -148,7 +163,7 @@ linear_issue_uuid: "abc-123-def"  # Internal Linear UUID
 
 # ─── Progress Tracking ───────────────────────────────────────────
 current_phase: 3               # 0-7, which phase we're in
-phase_status: "in_progress"    # not_started | in_progress | completed | blocked
+phase_status: "in_progress"    # not_started | in_progress | completed | blocked | cancelled | waiting_approval | changes_requested
 last_updated: "2026-02-26T23:30:00+05:30"
 started_at: "2026-02-26T22:00:00+05:30"
 
@@ -165,7 +180,7 @@ phases_completed:
     notes: "Plan created — 3 files to modify"
 
 # ─── Git Context ─────────────────────────────────────────────────
-branch_name: "feature/lin-42-fix-login-page-crash"
+branch_name: "feature/lin-42-fix-login-page-crash"  # Built as: {branch_prefix}{issue_id}-{slug}
 base_branch: "main"
 commits:
   - hash: "a1b2c3d"
@@ -290,6 +305,90 @@ If the user needs to end a session mid-work:
 - **Cancelled issues**: Mark `phase_status: cancelled` with a note in `context`.
 - **Cleaning up**: The user can delete old state files manually if the directory gets large.
 
+### Schema Validation & Corruption Recovery
+
+> **CRITICAL**: State files can become malformed due to partial writes, crashes, or manual edits. The agent MUST validate before trusting.
+
+**On every state file load**, validate these required fields exist and have valid types:
+
+| Field | Type | Valid Values |
+|-------|------|-------------|
+| `issue_id` | string | Non-empty |
+| `current_phase` | integer | 0–7 |
+| `phase_status` | string | `not_started`, `in_progress`, `completed`, `blocked`, `cancelled`, `waiting_approval`, `changes_requested` |
+| `branch_name` | string | Non-empty (if phase ≥ 3) |
+| `base_branch` | string | Non-empty |
+
+**If validation fails**:
+
+1. **Tell the user**:
+   > "⚠️ **State file corrupted**: `.agents/state/linear-agent/{issue_id}.yml`
+   >
+   > The file could not be loaded properly. This may be due to a crash or partial write.
+   >
+   > Options:
+   > 1. **Restore from backup** — Use `.bak` file if available
+   > 2. **Start fresh** — Delete state and begin this issue from scratch
+   > 3. **Skip** — Ignore this issue and pick a different one
+   >
+   > What would you like to do?"
+
+2. **If backup exists** (`.agents/state/linear-agent/{issue_id}.yml.bak`):
+   - Validate the backup too.
+   - If backup is valid: offer to restore it.
+   - If backup is also corrupt: offer fresh start or skip.
+
+3. **Never silently proceed** with a corrupt state file.
+
+### Concurrent Access Protection
+
+> Prevents data corruption when two IDE sessions access the same state file.
+
+**Write Locking Protocol**:
+
+1. **Before writing** any state file, create a lock file:
+   ```
+   .agents/state/linear-agent/{issue_id}.yml.lock
+   ```
+   - Lock file contents:
+     ```yaml
+     locked_by: "{session_identifier}"
+     locked_at: "{ISO-8601 timestamp}"
+     ```
+
+2. **Before writing**, check if a `.lock` file already exists:
+   - If it exists and is **less than 5 minutes old**: **warn the user**:
+     > "⚠️ Another session may be writing to this state file. Last locked at {locked_at}. Proceed anyway?"
+   - If it exists and is **more than 5 minutes old**: treat as stale, overwrite the lock.
+   - If it doesn't exist: create the lock and proceed.
+
+3. **After writing**: delete the `.lock` file.
+
+4. **On crash**: Stale locks (>5 min) are auto-cleaned on next access.
+
+### Backup Strategy
+
+> One bad write should never destroy the entire session context.
+
+**Before every state file write**:
+
+1. **Create a backup** of the current file:
+   ```bash
+   cp {state_file}.yml {state_file}.yml.bak
+   ```
+
+2. **Write the updated state** to the original file.
+
+3. **Validate the write** by re-reading and validating the file:
+   - If valid: keep the `.bak` (it will be overwritten next time).
+   - If invalid: **restore from backup**:
+     ```bash
+     cp {state_file}.yml.bak {state_file}.yml
+     ```
+     - **Inform the user**: "⚠️ State write failed. Restored from backup. Please try again."
+
+4. **Backup files are NOT gitignored** — they live alongside state files in `.agents/state/` (which is already gitignored).
+
 ---
 
 ## Agent Lifecycle
@@ -375,7 +474,17 @@ If the user needs to end a session mid-work:
    - Call `list_issues` with:
      - `project`: configured project name
      - `state`: "Todo" (also try "To Do", "Backlog" if no results — check with `list_issue_statuses` first)
+     - `label`: filter by `linear_labels` from config (if set)
+     - `limit`: use `max_issues_display` from config (default: 20)
    - Sort by priority (configured `priority_order`).
+
+   **Pagination**: If more issues exist than the limit:
+   - Fetch only up to `max_issues_display` results.
+   - **Tell the user**: "Showing top {N} of {total} issues. Adjust `max_issues_display` in config to see more."
+
+   **Rate Limiting**: If the Linear API returns a 429 (rate limit) error:
+   - Wait with **exponential backoff**: 1s → 2s → 4s → 8s (max 3 retries).
+   - If still failing after retries, **tell the user** and proceed with whatever results were fetched.
 
 2. **Present Issues to User**
    - Format as a numbered table:
@@ -390,7 +499,8 @@ If the user needs to end a session mid-work:
      ```
 
 3. **Selection Mode**
-   - Ask the user:
+   - If `auto_pick_highest: true` in config: automatically select the highest priority issue.
+   - Otherwise, ask the user:
      > "Would you like me to **auto-pick** the highest priority issue, or would you like to **choose** one? (Type a number, 'auto', or 'skip' to skip an issue)"
    - **Auto-pick**: Select the first issue by priority order.
    - **Manual pick**: Wait for user to specify a number or issue ID.
@@ -428,7 +538,10 @@ If the user needs to end a session mid-work:
      - Which files/components are likely affected.
      - Dependencies and related code.
      - Existing tests that might need updating.
-   - Use `grep_search`, `find_by_name`, `view_file_outline` to explore.
+    - **Search for patterns** in the codebase to locate relevant code.
+    - **Discover files** matching likely names or paths.
+    - **View file structures** to understand module organization.
+    - _(See [Tool Mapping Table](#tool-mapping) for IDE-specific tool names.)_
 
 4. **Create Implementation Plan**
    - Write a structured plan as an **artifact** (`implementation_plan.md`):
@@ -489,13 +602,22 @@ If the user needs to end a session mid-work:
 ### Steps
 
 1. **Create Feature Branch**
+   - Build the branch name using the config's `branch_prefix` (default: `feature/`):
+     ```
+     {branch_prefix}{issue_id_lowercase}-{slugified_title}
+     ```
+   - **Slug rules** (applied to `slugified_title`):
+     - Lowercase only
+     - Replace spaces and special characters with `-`
+     - Strip consecutive hyphens
+     - Cap at **40 characters** (truncate, don't break mid-word)
+   - Example: `feature/lin-42-fix-login-page-crash`
    ```bash
    git checkout {base_branch}
    git pull origin {base_branch}
-   git checkout -b feature/{issue_id_lowercase}-{slugified_title}
+   git checkout -b {branch_name}
    ```
-   - Example: `feature/lin-42-fix-login-page-crash`
-   - **Tell the user**: "🌿 Created branch: `feature/{branch_name}`"
+   - **Tell the user**: "🌿 Created branch: `{branch_name}`"
 
 2. **Implement Changes**
    - Follow the implementation plan from Phase 2.
@@ -591,7 +713,7 @@ If the user needs to end a session mid-work:
 
 1. **Push Branch to GitHub**
    ```bash
-   git push origin feature/{branch_name}
+   git push origin {branch_name}
    ```
    - **Tell the user**: "📤 Pushed branch to GitHub"
 
@@ -601,7 +723,7 @@ If the user needs to end a session mid-work:
      --title "{issue_id}: {issue_title}" \
      --body "{pr_body}" \
      --base {base_branch} \
-     --head feature/{branch_name}
+     --head {branch_name}
    ```
    - **PR Body Template**:
      ```markdown
@@ -636,9 +758,16 @@ If the user needs to end a session mid-work:
    - **Tell the user**: "🖥️ Dev server running at `http://localhost:{dev_port}`"
 
 4. **Take Screenshots** (if applicable)
-   - Use the browser subagent to navigate to the relevant pages.
-   - Capture screenshots of the changes.
-   - Save screenshots to the artifacts directory.
+   - **Check `skip_screenshots`** in config — if `true`, skip this step entirely.
+   - **Primary method**: Use the browser subagent to navigate to the relevant pages.
+   - **Fallback** (if browser subagent is unavailable):
+     ```bash
+     npx playwright screenshot http://localhost:{dev_port} screenshot.png 2>/dev/null || true
+     ```
+   - **Graceful degradation**: If both methods fail:
+     - Log: "⚠️ Screenshots could not be captured — continuing without them."
+     - **Do NOT block** PR creation or review notification.
+   - Save any captured screenshots to the artifacts directory.
 
 5. **Notify on Linear**
    - Update issue state to a review state (e.g., "In Review" or "Ready for Testing")
@@ -649,7 +778,7 @@ If the user needs to end a session mid-work:
      🤖 **Agent: Ready for Review**
 
      **Pull Request**: {pr_url}
-     **Branch**: `feature/{branch_name}`
+     **Branch**: `{branch_name}`
 
      **Changes Summary**:
      - {change 1}
@@ -686,7 +815,7 @@ If the user needs to end a session mid-work:
 7. **Handle Response**
    - **Approved**: Proceed to Phase 6.
    - **Changes needed**: Go back to Phase 3, apply requested changes, re-run Phase 4, return here.
-   - **Cancel**: Move issue back to "Todo", delete branch, notify on Linear.
+   - **Cancel**: Run the **[Abort / Cleanup Procedure](#abort--cleanup-procedure)** below.
 
 8. **📝 Update State File** _(State Management)_
    - Update `current_phase: 5`, `phase_status: completed` (or `waiting_approval`).
@@ -703,15 +832,34 @@ If the user needs to end a session mid-work:
 
 1. **Confirm Deployment**
    - **Tell the user**:
-     > "🚀 Deploying branch `feature/{branch_name}` to GitHub..."
+     > "🚀 Deploying branch `{branch_name}` to GitHub..."
 
 2. **Ensure Branch is Up-to-Date**
-   ```bash
-   git fetch origin {base_branch}
-   git rebase origin/{base_branch}
-   git push origin feature/{branch_name} --force-with-lease
-   ```
-   - If rebase conflicts: **stop and ask user for help**.
+   - **Step 1**: Check for other contributors on the branch:
+     ```bash
+     git log origin/{branch_name} --format='%ae' | sort -u
+     ```
+   - **If multiple contributors detected**:
+     - ⚠️ **Warn the user**: "This branch has commits from multiple authors. Force pushing after rebase may overwrite their work."
+     - **Prefer merge** over rebase:
+       ```bash
+       git fetch origin {base_branch}
+       git merge origin/{base_branch}
+       git push origin {branch_name}
+       ```
+   - **If single contributor (default path)**:
+     ```bash
+     git fetch origin {base_branch}
+     git rebase origin/{base_branch}
+     ```
+     - Before force pushing, **tell the user**:
+       > "⚠️ About to force push (with lease) to `{branch_name}` after rebase. This is safe for single-author branches. Proceed?"
+     - On confirmation:
+       ```bash
+       git push origin {branch_name} --force-with-lease
+       ```
+   - If merge/rebase conflicts: **stop and ask user for help**.
+   - **Config override**: If `prefer_merge_over_rebase: true` is set in config, always use merge instead of rebase.
 
 3. **Verify PR Status**
    ```bash
@@ -732,7 +880,7 @@ If the user needs to end a session mid-work:
    >
    > - **PR**: {pr_url}
    > - **Preview URL**: {preview_url} (if available)
-   > - **Branch**: `feature/{branch_name}`
+   > - **Branch**: `{branch_name}`
    >
    > The PR is ready for you to merge when you're satisfied. Proceeding to close the Linear issue."
 
@@ -745,8 +893,14 @@ If the user needs to end a session mid-work:
 ### Steps
 
 1. **Take Final Screenshots** (if applicable)
-   - If there's a preview URL, use the browser subagent to capture screenshots.
-   - Save to artifacts.
+   - **Check `skip_screenshots`** in config — if `true`, skip this step entirely.
+   - **Primary method**: If there's a preview URL, use the browser subagent to capture screenshots.
+   - **Fallback** (if browser subagent is unavailable):
+     ```bash
+     npx playwright screenshot {preview_url} final-screenshot.png 2>/dev/null || true
+     ```
+   - **Graceful degradation**: If screenshots fail, note "Screenshots unavailable" in the closure comment and continue.
+   - Save any captured screenshots to artifacts.
 
 2. **Gather All Details**
    - PR URL and number
@@ -766,7 +920,7 @@ If the user needs to end a session mid-work:
 
      ## Pull Request
      🔗 {pr_url}
-     📌 Branch: `feature/{branch_name}`
+     📌 Branch: `{branch_name}`
 
      ## Changes
      | File | Change |
@@ -832,6 +986,74 @@ If the user needs to end a session mid-work:
 
 ---
 
+## Abort / Cleanup Procedure
+
+**When to run**: When the user cancels, when implementation fails irrecoverably, or when abandoning an issue mid-work.
+
+> This procedure prevents dangling branches, stuck Linear issues, and orphaned state files.
+
+### Steps
+
+1. **Ask User What to Clean Up**
+   - **Tell the user**:
+     > "🧹 **Cleanup required.** I'll clean up the following (confirm each):
+     > 1. Delete local branch `{branch_name}`
+     > 2. Delete remote branch `{branch_name}` (if pushed)
+     > 3. Close PR #{pr_number} (if created)
+     > 4. Reset Linear issue to 'Todo'
+     > 5. Update state file as cancelled
+     >
+     > Type 'all' to do everything, or specify which items to skip."
+
+2. **Git Branch Cleanup**
+   ```bash
+   # Switch to base branch first
+   git checkout {base_branch}
+   
+   # Delete local branch
+   git branch -D {branch_name}
+   
+   # Delete remote branch (if it exists)
+   git push origin --delete {branch_name} 2>/dev/null || true
+   ```
+
+3. **Close PR** (if created)
+   ```bash
+   gh pr close {pr_number} --comment "Cancelled by Linear Issue Agent" 2>/dev/null || true
+   ```
+
+4. **Reset Linear Issue**
+   - Move issue back to **"Todo"** status.
+   - Remove agent assignment.
+   - Add a comment:
+     ```markdown
+     🤖 **Agent: Issue Cancelled**
+
+     This issue was returned to Todo.
+     Reason: {user's reason or "cancelled by user"}
+
+     Any partial work has been cleaned up.
+     ```
+
+5. **State File Cleanup**
+   - Update the issue's state file: set `phase_status: cancelled`, add cancellation reason to `context`.
+   - Clear `_active.yml` (remove or empty it).
+   - **Keep** the state file as a historical log (do not delete).
+
+6. **Report to User**
+   - **Tell the user**:
+     > "🧹 **Cleanup complete!**
+     >
+     > - ✅ Local branch deleted
+     > - ✅ Remote branch deleted
+     > - ✅ PR closed
+     > - ✅ Linear issue reset to Todo
+     > - ✅ State file updated (cancelled)
+     >
+     > Ready to pick up a different issue, or stop?"
+
+---
+
 ## Error Handling
 
 ### General Rules
@@ -855,6 +1077,8 @@ If the user needs to end a session mid-work:
 | Build fails | Analyze. Fix if possible. Ask user if unclear. |
 | Issue has no description | Ask user for requirements before planning. |
 | Network/API errors | Retry once. If still failing, report to user. |
+| Linear API rate limit (429) | Exponential backoff: 1s → 2s → 4s → 8s. Max 3 retries. Report if still failing. |
+| Screenshot capture fails | Log warning, continue without screenshots. Never block PR creation. |
 
 ---
 

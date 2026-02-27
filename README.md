@@ -1,5 +1,9 @@
 # 🤖 Linear Issue Agent
 
+![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![Last Updated](https://img.shields.io/badge/last_updated-2026--02--27-brightgreen)
+
 An autonomous AI agent skill that bridges **Linear** (project management) and **GitHub** (code & deployment). It picks up To-Do issues, plans, implements, tests, and deploys — with full transparency and human-in-the-loop approval gates.
 
 ## What It Does
@@ -51,27 +55,89 @@ Use the `/linear-agent` slash command in your AI IDE, or just ask:
 
 > "Work on my Linear issues"
 
+## Supported IDEs
+
+| IDE | Support Level | Notes |
+|-----|--------------|-------|
+| **Gemini** | ✅ Native | Full support, including `// turbo-all` auto-approval |
+| **Claude Code** | ✅ Compatible | Works with tool mapping (see SKILL.md [Tool Mapping Table](#tool-mapping)) |
+| **Cursor** | ⚠️ Requires adaptation | Map tools manually, no `// turbo-all` support |
+| **Windsurf** | ⚠️ Requires adaptation | Map tools manually, no `// turbo-all` support |
+
+> The skill uses **capability-based language** (e.g., "search for patterns") instead of IDE-specific tool names. See the [Tool Mapping Table](.agents/skills/linear-agent/SKILL.md#tool-mapping) in SKILL.md for exact equivalents.
+
 ## Requirements
+
+### Prerequisites
 
 - **Git** with push access to a GitHub remote
 - **GitHub CLI (`gh`)** — installed and authenticated
-- **Linear MCP Server** — connected and authenticated
-- An AI IDE that supports skills/workflows (e.g., Gemini)
+- **Linear MCP Server** — connected and authenticated (see setup below)
+- An AI IDE that supports skills/workflows (see table above)
+
+### Linear MCP Setup
+
+The agent communicates with Linear via the **Model Context Protocol (MCP)**. MCP is a standard that lets AI tools interact with external services like Linear.
+
+**Step 1**: Add the Linear MCP server to your IDE:
+
+```bash
+# For most IDEs, add this to your MCP configuration:
+npx mcp-remote https://mcp.linear.app/sse
+```
+
+**Step 2**: Authenticate when prompted — you'll be redirected to Linear to grant access.
+
+**Step 3**: Verify the connection works:
+
+```
+# In your AI IDE, try running:
+# "List my Linear teams"
+# If it returns team names, MCP is connected.
+```
+
+> **Why MCP?** It allows the AI agent to read issues, update statuses, and post comments on Linear directly — no webhooks or API keys to manage manually.
+
+### Required Auth Scopes
+
+**GitHub CLI (`gh`)**:
+- `repo` — read/write access to repositories (branches, PRs, commits)
+
+Verify with:
+```bash
+gh auth status
+```
+
+**Linear (via MCP)**:
+- **Issues**: read + write (fetch To-Do issues, update status, assign)
+- **Comments**: write (post plan summaries, review notifications, closure details)
+- **Projects**: read (discover project issues)
+- **Teams**: read (verify connectivity, discover statuses)
+
+These scopes are granted automatically when you authorize the Linear MCP connection.
 
 ## Configuration Options
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `linear_project` | ✅ | Linear project name, slug, or ID |
-| `linear_team` | ✅ | Linear team name or key |
-| `base_branch` | Auto-detect | Branch to create features from |
-| `dev_command` | Optional | Dev server command |
-| `test_command` | Optional | Test runner command |
-| `lint_command` | Optional | Linter command |
-| `build_command` | Optional | Build/compile command |
-| `deployment.platform` | Optional | Vercel, Netlify, etc. |
+| Field | Required | Default | Description |
+|-------|----------|---------|-------------|
+| `linear_project` | ✅ | — | Linear project name, slug, or ID |
+| `linear_team` | ✅ | — | Linear team name or key |
+| `base_branch` | No | Auto-detect | Branch to create features from |
+| `branch_prefix` | No | `feature/` | Prefix for feature branch names |
+| `prefer_merge_over_rebase` | No | `false` | Use merge instead of rebase for syncing |
+| `dev_command` | No | — | Dev server command |
+| `test_command` | No | — | Test runner command |
+| `lint_command` | No | — | Linter command |
+| `build_command` | No | — | Build/compile command |
+| `deployment.platform` | No | `none` | Vercel, Netlify, GitHub Pages, etc. |
+| `pr_draft` | No | `false` | Create PRs as drafts |
+| `pr_reviewers` | No | `[]` | GitHub usernames to request review from |
+| `pr_labels` | No | `[]` | Labels to add to PRs |
+| `skip_screenshots` | No | `false` | Skip screenshot capture if not available |
+| `max_issues_display` | No | `20` | Max issues to show in discovery |
+| `auto_pick_highest` | No | `false` | Auto-pick highest priority without asking |
 
-See the full [config template](.agents/skills/linear-agent/config.template.yml) for all options.
+See the full [config template](.agents/skills/linear-agent/config.template.yml) for all options with inline documentation.
 
 ## Key Principles
 
@@ -80,7 +146,12 @@ See the full [config template](.agents/skills/linear-agent/config.template.yml) 
 - **📚 Learnings** — Each closed ticket includes notes for future reference
 - **🔧 Universal** — Works with any tech stack via configurable commands
 - **🔔 Notifications** — Uses Linear comments to trigger email/app notifications
+- **💾 Resilient State** — Session state persists to disk with backup, validation, and corruption recovery
 
 ## License
 
-Private — for personal use only.
+This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for a detailed version history.

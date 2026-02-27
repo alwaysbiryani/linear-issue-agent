@@ -26,6 +26,11 @@ base_branch: ""
 # Example: "feature/" produces branches like "feature/lin-42-fix-login"
 branch_prefix: "feature/"
 
+# Prefer merge over rebase when syncing with base branch (safer for collaborative branches)
+# When true, always uses merge. When false (default), uses rebase for single-author branches
+# and merge when multiple contributors are detected.
+prefer_merge_over_rebase: false
+
 # ─── COMMANDS ─────────────────────────────────────────────────────────────────
 
 # Dev server command (for local testing during review)
@@ -53,6 +58,18 @@ lint_command: ""
 # 1=Urgent, 2=High, 3=Normal, 4=Low, 0=None
 priority_order: [1, 2, 3, 4, 0]
 
+# Auto-pick the highest priority issue without asking the user
+# When false (default), presents a selection menu
+auto_pick_highest: false
+
+# Maximum number of issues to display in the discovery table
+# Keeps the context window manageable for large projects
+max_issues_display: 20
+
+# Only show issues with these Linear labels (leave empty for all)
+# Example: ["frontend", "bug"]
+linear_labels: []
+
 # ─── DEPLOYMENT ───────────────────────────────────────────────────────────────
 
 # Deployment platform
@@ -64,6 +81,19 @@ deployment:
   # Use {branch} as placeholder for the branch name
   # Example: "https://{branch}--my-app.netlify.app"
   preview_url_pattern: ""
+
+# ─── PR SETTINGS ──────────────────────────────────────────────────────────────
+
+# Create PRs as drafts (useful for teams that require CI to pass first)
+pr_draft: false
+
+# GitHub usernames to automatically request review from
+# Example: ["octocat", "mona"]
+pr_reviewers: []
+
+# Labels to automatically add to created PRs
+# Example: ["agent-created", "auto-pr"]
+pr_labels: []
 
 # ─── LINEAR STATUSES ──────────────────────────────────────────────────────────
 # Map agent phases to your Linear workflow statuses.
@@ -77,3 +107,9 @@ statuses:
   in_progress: ""    # e.g., "In Progress", "Doing"
   in_review: ""      # e.g., "In Review", "Ready for Testing", "QA"
   done: ""           # e.g., "Done", "Closed", "Complete"
+
+# ─── AGENT BEHAVIOR ──────────────────────────────────────────────────────────
+
+# Skip screenshot capture if browser subagent is unavailable
+# When true, the agent won't attempt screenshots and won't block on failure
+skip_screenshots: false
