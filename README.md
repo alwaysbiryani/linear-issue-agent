@@ -1,27 +1,31 @@
 # 🤖 Linear Issue Agent
 
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/badge/version-1.2.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Last Updated](https://img.shields.io/badge/last_updated-2026--02--27-brightgreen)
 
-An autonomous AI agent skill that bridges **Linear** (project management) and **GitHub** (code & deployment). It picks up To-Do issues, plans, implements, tests, and deploys — with full transparency and human-in-the-loop approval gates.
+An autonomous AI agent skill that bridges **Linear** (project management) and **GitHub** (code & deployment). It picks up To-Do issues, plans, implements, tests, and deploys — with full transparency, human-in-the-loop approval gates, **email notifications**, **auto error resolution**, **proactive CI testing**, and **automatic conflict resolution**.
 
 ## What It Does
 
 ```
 To-Do Issue → Plan → Implement → Test → Review → Deploy → Close
+                ↑         ↑         ↑        ↑        ↑
+              📧 stop   auto-fix  auto-fix  📧 stop  auto-resolve
+              for plan   errors    errors   for test  conflicts
 ```
 
 | Phase | Description |
 |-------|-------------|
 | **Init** | Validates config, syncs repo, connects to Linear |
 | **Discover** | Lists To-Do issues, lets you auto-pick or choose |
-| **Plan** | Analyzes codebase, creates implementation plan |
+| **Plan** | Analyzes codebase, creates implementation plan. **Sends email, waits for approval.** |
 | **Implement** | Writes code with full transparency on every change |
-| **Quality Gate** | Runs lint, tests, build — shows all output |
-| **Review** | Creates GitHub PR, takes screenshots, notifies via Linear |
-| **Deploy** | Ensures branch is clean and pushed to GitHub |
-| **Close** | Posts learnings, screenshots, links — marks issue Done |
+| **Quality Gate** | Runs lint, tests, build — **auto-fixes errors** up to 3 attempts before asking you |
+| **Review** | Creates GitHub PR, takes screenshots. **Sends email, waits for approval.** |
+| **Proactive CI** | Re-runs tests locally after push, fixes issues before GitHub CI reports them |
+| **Deploy** | Ensures branch is clean — **auto-resolves merge conflicts** when possible |
+| **Close** | Posts learnings, screenshots, links — marks issue Done (manual confirmation) |
 
 ## Setup
 
@@ -47,9 +51,23 @@ cp .agents/skills/linear-agent/config.template.yml .agents/config/linear-agent.y
 # At minimum, fill in:
 #   - linear_project: "Your Project Name"
 #   - linear_team: "Your Team"
+#   - notification_email: "your@gmail.com"  (optional but recommended)
 ```
 
-### 3. Run
+### 3. Set up email notifications (optional)
+
+```bash
+# Install msmtp
+brew install msmtp
+
+# Create ~/.msmtprc with Gmail SMTP config
+# See SKILL.md "Notification System" section for the full template
+
+# Test it works
+echo "test" | msmtp your@gmail.com
+```
+
+### 4. Run
 
 Use the `/linear-agent` slash command in your AI IDE, or just ask:
 
@@ -74,6 +92,7 @@ Use the `/linear-agent` slash command in your AI IDE, or just ask:
 - **GitHub CLI (`gh`)** — installed and authenticated
 - **Linear MCP Server** — connected and authenticated (see setup below)
 - An AI IDE that supports skills/workflows (see table above)
+- **msmtp** (optional) — for email notifications (`brew install msmtp`)
 
 ### Linear MCP Setup
 
@@ -136,16 +155,25 @@ These scopes are granted automatically when you authorize the Linear MCP connect
 | `skip_screenshots` | No | `false` | Skip screenshot capture if not available |
 | `max_issues_display` | No | `20` | Max issues to show in discovery |
 | `auto_pick_highest` | No | `false` | Auto-pick highest priority without asking |
+| **`notification_email`** | No | — | Email address for notifications (e.g., Gmail) |
+| **`notification_method`** | No | `msmtp` | How to send email: `msmtp`, `sendmail`, `mail`, `script` |
+| **`max_auto_fix_attempts`** | No | `3` | Max auto-fix retries per check before asking user (0 = always ask) |
+| **`lint_fix_command`** | No | — | Lint auto-fix command (e.g., `eslint . --fix`) |
+| **`proactive_conflict_resolution`** | No | `true` | Auto-resolve simple merge conflicts |
+| **`proactive_local_ci`** | No | `true` | Re-run CI locally after PR push |
 
 See the full [config template](.agents/skills/linear-agent/config.template.yml) for all options with inline documentation.
 
 ## Key Principles
 
 - **🔍 Full Transparency** — Every action is explained before and after execution
-- **🛑 Human-in-the-Loop** — Approval gate before deployment; you own the merge
+- **🛑 Human-in-the-Loop** — Approval gates at plan review and testing; you own the merge and issue closure
+- **📧 Email Notifications** — Get notified via email when your attention is needed (msmtp + Gmail SMTP)
+- **🔄 Auto Error Resolution** — Lint, test, and build errors auto-fixed up to 3 attempts before escalating
+- **🧪 Proactive CI** — Quality gates run locally after PR push, catching issues before GitHub Actions
+- **🔀 Conflict Resolution** — Simple merge conflicts auto-resolved; only complex ones escalated
 - **📚 Learnings** — Each closed ticket includes notes for future reference
 - **🔧 Universal** — Works with any tech stack via configurable commands
-- **🔔 Notifications** — Uses Linear comments to trigger email/app notifications
 - **💾 Resilient State** — Session state persists to disk with backup, validation, and corruption recovery
 
 ## License

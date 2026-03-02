@@ -113,3 +113,60 @@ statuses:
 # Skip screenshot capture if browser subagent is unavailable
 # When true, the agent won't attempt screenshots and won't block on failure
 skip_screenshots: false
+
+# ─── NOTIFICATIONS ──────────────────────────────────────────────────────────
+# Send email notifications when human attention is required.
+# This way you don't have to keep checking — the agent comes to you.
+#
+# Recommended setup: msmtp with Gmail SMTP
+#   1. brew install msmtp
+#   2. Create ~/.msmtprc (see SKILL.md "Notification System" section for template)
+#   3. chmod 600 ~/.msmtprc
+#   4. Test: echo "test" | msmtp your@gmail.com
+
+# Email address to receive notifications (leave empty to disable email notifications)
+notification_email: ""
+
+# How the agent sends email
+# Options: "msmtp" (recommended), "sendmail", "mail", "script"
+notification_method: "msmtp"
+
+# Custom notification script path (only used when notification_method is "script")
+# The script receives two arguments: $1 = subject, $2 = body
+# Example: ".agents/scripts/notify.sh"
+notification_script: ""
+
+# Which events trigger an email notification
+# All default to true when notification_email is set
+notify_on:
+  plan_approval: true        # Phase 2: plan ready for your review
+  review_approval: true      # Phase 5: PR ready for testing/approval
+  error_escalation: true     # Phase 4: auto-fix failed after max retries
+  conflict_escalation: true  # Phase 6: merge conflict could not be auto-resolved
+  ci_failure: true           # Phase 5B: CI failure that could not be auto-fixed
+
+# ─── AUTO ERROR RESOLUTION ──────────────────────────────────────────────────
+# The agent will automatically attempt to fix lint, test, and build errors
+# before escalating to you. Set max_auto_fix_attempts to 0 to disable
+# (always ask user immediately, original behavior).
+
+# Maximum auto-fix attempts per check type before escalating to user
+# Each attempt uses a progressively different strategy
+max_auto_fix_attempts: 3
+
+# Lint auto-fix command (run as the first fix attempt before manual analysis)
+# Examples: "npm run lint -- --fix", "ruff check . --fix", "eslint . --fix"
+lint_fix_command: ""
+
+# Proactive conflict resolution after PR push
+# When true: agent auto-resolves simple merge conflicts (import ordering,
+# whitespace, non-overlapping changes, lock files) and only escalates
+# genuinely ambiguous conflicts
+# When false: stops and asks user for help on any conflict (original behavior)
+proactive_conflict_resolution: true
+
+# Proactive local CI after PR push
+# When true: agent re-runs quality gates locally right after pushing,
+# in parallel with GitHub Actions, and auto-fixes issues before GH CI reports
+# When false: waits for GitHub CI results (original behavior)
+proactive_local_ci: true

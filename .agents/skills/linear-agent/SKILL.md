@@ -16,18 +16,20 @@ description: >
 
 1. [Prerequisites](#prerequisites)
 2. [Configuration](#configuration)
-3. [State Management & Session Continuity](#state-management--session-continuity)
-4. [Agent Lifecycle](#agent-lifecycle)
-5. [Phase 0: Initialization](#phase-0-initialization)
-6. [Phase 1: Issue Discovery](#phase-1-issue-discovery)
-7. [Phase 2: Planning](#phase-2-planning)
-8. [Phase 3: Implementation](#phase-3-implementation)
-9. [Phase 4: Quality Gate](#phase-4-quality-gate)
-10. [Phase 5: Ready for Review](#phase-5-ready-for-review)
-11. [Phase 6: Deployment](#phase-6-deployment)
-12. [Phase 7: Closure](#phase-7-closure)
-13. [Error Handling](#error-handling)
-14. [Transparency Rules](#transparency-rules)
+3. [Notification System](#notification-system)
+4. [State Management & Session Continuity](#state-management--session-continuity)
+5. [Agent Lifecycle](#agent-lifecycle)
+6. [Phase 0: Initialization](#phase-0-initialization)
+7. [Phase 1: Issue Discovery](#phase-1-issue-discovery)
+8. [Phase 2: Planning](#phase-2-planning) _(checkpoint + email notification)_
+9. [Phase 3: Implementation](#phase-3-implementation)
+10. [Phase 4: Quality Gate](#phase-4-quality-gate) _(auto-fix loop)_
+11. [Phase 5: Ready for Review](#phase-5-ready-for-review) _(checkpoint + email notification)_
+12. [Phase 5B: Proactive Local CI](#phase-5b-proactive-local-ci-post-push) _(post-push auto-fix)_
+13. [Phase 6: Deployment](#phase-6-deployment) _(conflict resolution algorithm)_
+14. [Phase 7: Closure](#phase-7-closure) _(manual checkpoint)_
+15. [Error Handling](#error-handling)
+16. [Transparency Rules](#transparency-rules)
 
 ---
 
@@ -123,6 +125,233 @@ deployment:
 1. Read `.agents/config/linear-agent.yml` from the current workspace root.
 2. If missing, copy the template and **ask the user** to fill in `linear_project` and `linear_team`.
 3. For optional fields, use sensible defaults or auto-detect where possible.
+
+---
+
+## Notification System
+
+> **Purpose**: Proactively notify the user via email when human attention is required, so they do not need to actively monitor the agent.
+
+### When Notifications Are Sent
+
+| Trigger | Phase | Condition |
+|---------|-------|-----------|
+| Plan ready for approval | Phase 2 | Plan created, waiting for user review |
+| PR ready for testing | Phase 5 | PR created, dev server running, waiting for approval |
+| Error escalation | Phase 4 | Auto-fix exhausted `max_auto_fix_attempts` for lint/test/build |
+| Conflict escalation | Phase 6 | Auto conflict resolution failed for one or more files |
+| CI failure escalation | Phase 5B | Post-push local CI found unfixable issue |
+
+### Prerequisites
+
+- `notification_email` must be **non-empty** in config.
+- The corresponding `notify_on.*` flag must be `true`.
+- If either condition is not met, **skip the notification silently** (do not warn or error).
+
+### msmtp Setup Guide (One-Time)
+
+The recommended notification method is `msmtp` with Gmail SMTP:
+
+1. **Install msmtp**:
+   ```bash
+   brew install msmtp
+   ```
+
+2. **Create `~/.msmtprc`**:
+   ```
+   # Gmail SMTP configuration
+   defaults
+   auth           on
+   tls            on
+   tls_trust_file /etc/ssl/cert.pem
+   logfile        ~/.msmtp.log
+
+   account        gmail
+   host           smtp.gmail.com
+   port           587
+   from           your-email@gmail.com
+   user           your-email@gmail.com
+   password       your-app-password
+
+   account default : gmail
+   ```
+
+3. **Set permissions**:
+   ```bash
+   chmod 600 ~/.msmtprc
+   ```
+
+4. **Generate a Gmail App Password**:
+   - Go to https://myaccount.google.com/apppasswords
+   - Select "Mail" and your device
+   - Use the generated 16-character password in `~/.msmtprc`
+
+5. **Test**:
+   ```bash
+   echo "Linear Agent test notification" | msmtp your-email@gmail.com
+   ```
+
+### Sending Email
+
+Use the terminal/Bash tool to send email. The method depends on `notification_method` in config:
+
+**Method: `msmtp`** (recommended)
+```bash
+printf "To: {notification_email}\nSubject: [Linear Agent] {subject}\nContent-Type: text/plain; charset=UTF-8\n\n{body}" | msmtp {notification_email}
+```
+
+**Method: `sendmail`**
+```bash
+printf "Subject: [Linear Agent] {subject}\n\n{body}" | sendmail {notification_email}
+```
+
+**Method: `mail`**
+```bash
+echo "{body}" | mail -s "[Linear Agent] {subject}" {notification_email}
+```
+
+**Method: `script`**
+```bash
+{notification_script} "[Linear Agent] {subject}" "{body}"
+```
+
+### Email Templates
+
+**Plan Approval Required** (Phase 2):
+- **Subject**: `Action Required: Plan ready for {issue_id} - {issue_title}`
+- **Body**:
+  ```
+  The Linear Issue Agent has created an implementation plan for:
+
+  Issue: {issue_id} - {issue_title}
+  Linear: {issue_url}
+
+  Plan Summary:
+  {brief plan summary — affected files, approach, estimated scope}
+
+  Please return to your IDE and respond:
+  - "approved" to proceed with implementation
+  - "changes needed: {description}" to revise the plan
+  - "cancel" to abort
+
+  This notification was sent by the Linear Issue Agent.
+  ```
+
+**Review Approval Required** (Phase 5):
+- **Subject**: `Action Required: PR ready for review - {issue_id}`
+- **Body**:
+  ```
+  The Linear Issue Agent has completed implementation and created a PR:
+
+  Issue: {issue_id} - {issue_title}
+  PR: {pr_url}
+  Branch: {branch_name}
+
+  Changes Summary:
+  {list of files changed with brief descriptions}
+
+  Quality Gate: {lint/test/build status}
+
+  How to Test:
+  {testing instructions}
+
+  Please review the PR and return to your IDE to respond:
+  - "approved" to proceed to deployment
+  - "changes needed: {description}" for revisions
+  - "cancel" to abort
+
+  This notification was sent by the Linear Issue Agent.
+  ```
+
+**Error Escalation** (Phase 4):
+- **Subject**: `Action Required: Auto-fix failed for {issue_id} - {check_type}`
+- **Body**:
+  ```
+  The Linear Issue Agent could not auto-fix {check_type} errors after
+  {max_auto_fix_attempts} attempts.
+
+  Issue: {issue_id} - {issue_title}
+  Check: {lint|tests|build}
+
+  Error Summary:
+  {last error output}
+
+  Attempts Made:
+  1. {strategy and result for attempt 1}
+  2. {strategy and result for attempt 2}
+  3. {strategy and result for attempt 3}
+
+  Please return to your IDE to help resolve this issue.
+  You can also type "skip" to proceed with the error unresolved.
+
+  This notification was sent by the Linear Issue Agent.
+  ```
+
+**Conflict Escalation** (Phase 6):
+- **Subject**: `Action Required: Merge conflict in {issue_id}`
+- **Body**:
+  ```
+  The Linear Issue Agent encountered merge conflicts it could not
+  auto-resolve.
+
+  Issue: {issue_id} - {issue_title}
+  Branch: {branch_name}
+
+  Conflicting Files:
+  {list of conflicting files}
+
+  Auto-Resolved: {list of files that were resolved, if any}
+  Needs Manual Resolution: {list of remaining conflicts}
+
+  What Was Tried:
+  {description of resolution attempts}
+
+  Please return to your IDE to resolve the remaining conflicts.
+
+  This notification was sent by the Linear Issue Agent.
+  ```
+
+**CI Failure** (Phase 5B):
+- **Subject**: `Action Required: CI failing for {issue_id}`
+- **Body**:
+  ```
+  The Linear Issue Agent detected CI failures that could not be
+  auto-fixed.
+
+  Issue: {issue_id} - {issue_title}
+  PR: {pr_url}
+
+  Failing Checks:
+  {list of failed checks with error summaries}
+
+  Auto-Fix Attempts:
+  {what was tried and why it failed}
+
+  Please return to your IDE to help resolve the CI failures.
+
+  This notification was sent by the Linear Issue Agent.
+  ```
+
+### Error Handling for Notifications
+
+- If the email command fails: **log a warning** but **do NOT block** the workflow.
+  ```
+  ⚠️ Email notification failed: {error}. Continuing without notification.
+  ```
+- **Never retry** email sending more than once.
+- **Always still post the Linear comment** (which triggers Linear's own notification system as a fallback).
+- Log notification attempts in the state file `notifications_sent` list.
+
+### Notification State Tracking
+
+After every notification attempt (success or failure), append to `notifications_sent` in the state file:
+
+```yaml
+- type: "{trigger_type}"          # plan_approval | review_approval | error_escalation | conflict_escalation | ci_failure
+  sent_at: "{ISO-8601 timestamp}"
+  method: "{notification_method}"
+  success: true                   # or false if sending failed
+```
 
 ---
 
@@ -223,7 +452,47 @@ screenshots: []
 
 # ─── Learnings (filled in Phase 7) ───────────────────────────────
 learnings: ""
+
+# ─── Auto-Fix Tracking (filled in Phase 4 / Phase 5B) ───────────
+# Tracks auto-fix attempts per check type to prevent infinite loops.
+# Reset at the start of each phase that runs quality gates.
+auto_fix_attempts:
+  lint:
+    attempts: 0
+    last_error: ""
+    resolved: false
+  tests:
+    attempts: 0
+    last_error: ""
+    resolved: false
+  build:
+    attempts: 0
+    last_error: ""
+    resolved: false
+
+# ─── Conflict Resolution Tracking (filled in Phase 6) ───────────
+# Tracks merge conflict auto-resolution attempts
+conflict_resolution:
+  attempts: 0
+  last_conflict_files: []
+  auto_resolved: false
+  escalated_to_user: false
+  resolution_notes: ""
+
+# ─── Notification Log ───────────────────────────────────────────
+# Tracks all email notifications sent (keep last 20 entries max)
+notifications_sent:
+  - type: "plan_approval"
+    sent_at: "2026-02-26T22:10:00+05:30"
+    method: "msmtp"
+    success: true
+
+# ─── Sub-Phase Tracking ─────────────────────────────────────────
+# Active sub-phase: "" | "5B_proactive_ci" | "6_conflict_resolution"
+sub_phase: ""
 ```
+
+> **Note**: The fields `auto_fix_attempts`, `conflict_resolution`, `notifications_sent`, and `sub_phase` are **optional**. Validation should NOT fail if they are absent — only validate their structure if present.
 
 ### Active Issue Pointer
 
@@ -319,6 +588,15 @@ If the user needs to end a session mid-work:
 | `branch_name` | string | Non-empty (if phase ≥ 3) |
 | `base_branch` | string | Non-empty |
 
+**Optional fields** (validate structure only if present, do NOT fail if absent):
+
+| Field | Type | Valid Values |
+|-------|------|-------------|
+| `auto_fix_attempts` | object | Each sub-key (`lint`, `tests`, `build`) has `attempts` (int ≥ 0), `last_error` (string), `resolved` (bool) |
+| `conflict_resolution` | object | `attempts` (int ≥ 0), `last_conflict_files` (list), `auto_resolved` (bool), `escalated_to_user` (bool) |
+| `notifications_sent` | list | Each entry has `type` (string), `sent_at` (ISO-8601), `method` (string), `success` (bool) |
+| `sub_phase` | string | `""`, `"5B_proactive_ci"`, `"6_conflict_resolution"` |
+
 **If validation fails**:
 
 1. **Tell the user**:
@@ -394,25 +672,36 @@ If the user needs to end a session mid-work:
 ## Agent Lifecycle
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     AGENT LIFECYCLE                             │
-│                                                                 │
-│  ┌──────────┐   ┌───────────┐   ┌──────────┐   ┌───────────┐  │
-│  │  INIT    │──▶│ DISCOVER  │──▶│  PLAN    │──▶│ IMPLEMENT │  │
-│  │ Phase 0  │   │  Phase 1  │   │ Phase 2  │   │  Phase 3  │  │
-│  └──────────┘   └───────────┘   └──────────┘   └───────────┘  │
-│                                                      │         │
-│                                                      ▼         │
-│  ┌──────────┐   ┌───────────┐   ┌──────────┐   ┌───────────┐  │
-│  │  CLOSE   │◀──│  DEPLOY   │◀──│ APPROVAL │◀──│ QUALITY   │  │
-│  │ Phase 7  │   │  Phase 6  │   │ Phase 5  │   │  Phase 4  │  │
-│  └──────────┘   └───────────┘   └──────────┘   └───────────┘  │
-│       │                              │                         │
-│       │                              │ (changes requested)     │
-│       │                              └──────▶ Phase 3          │
-│       │                                                        │
-│       └──────▶ Phase 1 (next issue)                            │
-└─────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│                        AGENT LIFECYCLE                                │
+│                                                                       │
+│  ┌──────────┐   ┌───────────┐   ┌──────────┐   ┌───────────┐        │
+│  │  INIT    │──▶│ DISCOVER  │──▶│  PLAN    │──▶│ IMPLEMENT │        │
+│  │ Phase 0  │   │  Phase 1  │   │ Phase 2  │   │  Phase 3  │        │
+│  └──────────┘   └───────────┘   └─────┬────┘   └───────────┘        │
+│                                   📧 + ⏸️                 │          │
+│                                  checkpoint                ▼          │
+│  ┌──────────┐   ┌───────────┐   ┌──────────┐   ┌───────────┐        │
+│  │  CLOSE   │◀──│  DEPLOY   │◀──│ APPROVAL │◀──│ QUALITY   │        │
+│  │ Phase 7  │   │  Phase 6  │   │ Phase 5  │   │  Phase 4  │        │
+│  └──────────┘   └─────┬────┘   └─────┬────┘   └───────────┘        │
+│       │               │          📧 + ⏸️         🔄 auto-fix         │
+│       │               │         checkpoint        loop               │
+│       │               │              │                                │
+│       │          ┌────┴─────┐   ┌────┴──────┐                        │
+│       │          │ CONFLICT │   │PROACTIVE  │                        │
+│       │          │ RESOLVE  │   │ LOCAL CI  │                        │
+│       │          │Phase 6A  │   │ Phase 5B  │                        │
+│       │          └──────────┘   └───────────┘                        │
+│       │          🔀 auto-resolve  🧪 auto-fix                        │
+│       │                                                               │
+│       │          (changes requested) ──────▶ Phase 3                  │
+│       └──────▶ Phase 1 (next issue)                                   │
+└───────────────────────────────────────────────────────────────────────┘
+
+Legend: 📧 = email notification  ⏸️ = manual checkpoint
+        🔄 = auto-fix loop      🔀 = conflict resolution
+        🧪 = proactive CI
 ```
 
 ---
@@ -585,11 +874,34 @@ If the user needs to end a session mid-work:
      Starting implementation now.
      ```
 
-6. **Tell the user**:
-   > "📝 I've analyzed the issue and created an implementation plan. Here's what I'm thinking: {brief summary}. The full plan is in the artifact. Proceeding to implementation."
+6. **MANUAL CHECKPOINT — Wait for Plan Approval**
+
+   - **Send email notification** (if `notification_email` is configured and `notify_on.plan_approval` is `true`):
+     - Use the **Plan Approval Required** template from the Notification System section.
+     - Log to state file `notifications_sent`.
+
+   - **Tell the user**:
+     > "📝 **Plan ready for your review!**
+     >
+     > {brief plan summary — affected files, approach, estimated scope}
+     >
+     > The full plan is in the artifact above. I've also posted a summary
+     > on the Linear issue.
+     >
+     > Please review and respond:
+     > - ✅ **'approved'** — I'll proceed to implementation
+     > - 🔄 **'changes needed: {description}'** — I'll revise the plan
+     > - ❌ **'cancel'** — I'll stop and move the issue back to To-Do"
+
+   - **STOP AND WAIT for user response.**
+
+   - **Handle response**:
+     - **Approved**: Proceed to Phase 3.
+     - **Changes needed**: Revise the plan based on feedback, re-present, wait again.
+     - **Cancel**: Run the **[Abort / Cleanup Procedure](#abort--cleanup-procedure)**.
 
 7. **📝 Update State File** _(State Management)_
-   - Update `current_phase: 2`, `phase_status: completed`.
+   - Update `current_phase: 2`, `phase_status: completed` (or `waiting_approval` while waiting).
    - Write `remaining_work` with all implementation steps from the plan.
    - Write `context` with the approach summary and key decisions.
 
@@ -657,51 +969,121 @@ If the user needs to end a session mid-work:
 
 ## Phase 4: Quality Gate
 
-**Goal**: Run all quality checks and report results transparently.
+**Goal**: Run all quality checks, **auto-fix failures** up to the configured retry limit, and only escalate to the user when auto-resolution is exhausted.
+
+### Auto-Fix Loop
+
+For each quality check (lint, tests, build), the agent follows this structured retry loop:
+
+```
+attempt = 0
+while check_fails AND attempt < max_auto_fix_attempts:
+    attempt += 1
+    analyze error output
+    determine fix strategy (see strategies below)
+    apply fix
+    re-run check
+    update state: auto_fix_attempts.{check}.attempts = attempt
+    update state: auto_fix_attempts.{check}.last_error = {error summary}
+
+if check passes:
+    update state: auto_fix_attempts.{check}.resolved = true
+    (if attempt > 0: commit auto-fix changes)
+elif max_auto_fix_attempts == 0:
+    ESCALATE immediately (original behavior — always ask user)
+else:
+    update state: auto_fix_attempts.{check}.resolved = false
+    ESCALATE to user (with email notification if configured)
+```
+
+> **Oscillation Detection**: If the same error message reappears after being "fixed" in a previous attempt, **escalate immediately** rather than retrying. This prevents infinite fix-undo loops.
 
 ### Steps
 
-1. **Run Linter** (if configured)
-   ```bash
-   {lint_command}
-   ```
+1. **Initialize Auto-Fix Tracking**
+   - Read `max_auto_fix_attempts` from config (default: 3). If set to `0`, use original behavior (always ask user on failures).
+   - Initialize `auto_fix_attempts` in state file if not present.
+   - **Tell the user**: "🔍 Running quality checks (auto-fix enabled, up to {N} attempts per check)..."
+
+2. **Run Linter** (if `lint_command` is configured)
    - **Tell the user**: "🔍 Running linter..."
-   - Show the full output.
-   - If there are errors: fix them, then re-run.
-   - **Tell the user**: "✅ Lint: passed" or "⚠️ Lint: {N} warnings (non-blocking)"
+   - Run `{lint_command}`. Show the full output.
+   - If passes: **Tell the user**: "✅ Lint: passed". Move on.
+   - If fails, **enter auto-fix loop**:
+     - **Attempt 1**: Run `{lint_fix_command}` if configured (e.g., `eslint . --fix`). Re-run `{lint_command}`.
+     - **Attempt 2**: Analyze remaining errors line-by-line. For each error, read the file, understand the lint rule being violated, and apply the fix manually using file edit tools. Re-run.
+     - **Attempt 3**: Look at how similar files in the codebase handle the same lint rules. Match those patterns in the failing files. Re-run.
+     - **If still failing after max attempts**: Escalate (see Escalation below).
+   - Update state `auto_fix_attempts.lint` after each attempt.
+   - **Tell the user**: "✅ Lint: passed" or "✅ Lint: passed after auto-fix ({N} attempts)" or "⚠️ Lint: {N} warnings (non-blocking)"
 
-2. **Run Tests** (if configured)
-   ```bash
-   {test_command}
-   ```
+3. **Run Tests** (if `test_command` is configured)
    - **Tell the user**: "🧪 Running tests..."
-   - Show the full output.
-   - If tests fail:
-     - Analyze the failure.
-     - Fix if clearly related to the changes.
-     - If unclear, **stop and ask the user**.
-   - **Tell the user**: "✅ Tests: {X}/{Y} passed" or "❌ Tests: {N} failed — {summary}"
+   - Run `{test_command}`. Show the full output.
+   - If passes: **Tell the user**: "✅ Tests: {X}/{Y} passed". Move on.
+   - If fails, **enter auto-fix loop**:
+     - **Attempt 1**: Analyze failure output. Identify which tests failed. Trace the failure to recent changes in `files_modified`. If the test expects old behavior that was intentionally changed by the implementation, update the test expectations. If the implementation has a bug, fix the source. Re-run.
+     - **Attempt 2**: Read the full test file and the source file it tests. Understand the assertion that fails. Check if the implementation logic is wrong (fix source) or if the test expectation is outdated (fix test). Re-run.
+     - **Attempt 3**: Look at the full `git diff` to see all changes made. Consider if an unintended side effect was introduced (e.g., a change in one file broke an import or type in another). Try reverting the problematic part and implementing it differently. Re-run.
+     - **If still failing after max attempts**: Escalate.
+   - Update state `auto_fix_attempts.tests` after each attempt.
+   - **Tell the user**: "✅ Tests: {X}/{Y} passed" or "✅ Tests: passed after auto-fix ({N} attempts)" or "❌ Tests: {N} failed — escalated"
 
-3. **Run Build** (if configured)
-   ```bash
-   {build_command}
-   ```
+4. **Run Build** (if `build_command` is configured)
    - **Tell the user**: "🏗️ Running build..."
-   - Show relevant output (errors/warnings).
-   - **Tell the user**: "✅ Build: successful" or "❌ Build: failed — {summary}"
+   - Run `{build_command}`. Show relevant output.
+   - If passes: **Tell the user**: "✅ Build: successful". Move on.
+   - If fails, **enter auto-fix loop**:
+     - **Attempt 1**: Parse build error messages. Common fixes: missing imports, type errors, undefined references, missing dependencies. Apply targeted fixes for each error. Re-run.
+     - **Attempt 2**: Check if the error is in a file the agent modified (check `files_modified`). If so, compare with the original via `git diff` and fix the specific issue introduced. If the error is in an unmodified file, check if it's a pre-existing issue. Re-run.
+     - **Attempt 3**: Read the build configuration (tsconfig.json, webpack.config.js, etc.) and related type declarations. Try a broader fix approach — update types, add missing exports, fix module resolution. Re-run.
+     - **If still failing after max attempts**: Escalate.
+   - Update state `auto_fix_attempts.build` after each attempt.
+   - **Tell the user**: "✅ Build: successful" or "✅ Build: passed after auto-fix ({N} attempts)" or "❌ Build: failed — escalated"
 
-4. **Quality Summary**
+5. **Escalation Protocol**
+   When auto-fix is exhausted for any check:
+   - **Tell the user** with full details:
+     > "🚨 **Auto-fix exhausted for {check_type}** ({max_auto_fix_attempts} attempts)
+     >
+     > **Error**: {error summary}
+     >
+     > **Attempts made**:
+     > 1. {what attempt 1 did and why it still failed}
+     > 2. {what attempt 2 did and why it still failed}
+     > 3. {what attempt 3 did and why it still failed}
+     >
+     > Please help resolve this, or type **'skip'** to proceed anyway."
+   - **Send email notification** (if `notification_email` is set and `notify_on.error_escalation` is `true`):
+     - Use the **Error Escalation** template from the Notification System section.
+   - **STOP and wait** for user to fix the issue or provide guidance.
+   - If user says **"skip"**: note `skipped: true` in state and proceed with a warning in the quality summary.
+
+6. **Commit Auto-Fixes** (if any changes were made during auto-fix)
+   ```bash
+   git add {fixed_files}
+   git commit -m "fix({scope}): auto-fix {check_type} errors
+
+   Refs: {issue_id}"
+   ```
+   - **Tell the user**: "💾 Committed auto-fix: `fix({scope}): auto-fix {check_type} errors`"
+   - Update `commits` list in state file.
+
+7. **Quality Summary**
    - Present a summary:
      ```
      ✅ Quality Gate Summary:
-     ├── Lint:   ✅ Passed
+     ├── Lint:   ✅ Passed (auto-fixed in 1 attempt)
      ├── Tests:  ✅ 24/24 passed
      └── Build:  ✅ Successful
      ```
+   - Possible statuses per check: `✅ Passed`, `✅ Passed (auto-fixed in N attempts)`, `❌ Failed — user resolved`, `⚠️ Skipped by user`, `➖ Not configured`
 
-5. **📝 Update State File** _(State Management)_
+8. **📝 Update State File** _(State Management)_
    - Update `current_phase: 4`, `phase_status: completed`.
-   - Note quality results in `context`.
+   - Note quality results and auto-fix details in `context`.
+   - Record any new commits in `commits` list.
+   - Update `auto_fix_attempts` with final state for each check.
 
 ---
 
@@ -799,7 +1181,13 @@ If the user needs to end a session mid-work:
      ```
    - This comment will trigger a Linear notification (email/app based on user's Linear notification settings).
 
-6. **Wait for Approval**
+6. **MANUAL CHECKPOINT — Wait for Approval**
+
+   - **Send email notification** (if `notification_email` is configured and `notify_on.review_approval` is `true`):
+     - Use the **Review Approval Required** template from the Notification System section.
+     - Include: PR URL, changes summary, quality gate results, testing instructions.
+     - Log to state file `notifications_sent`.
+
    - **Tell the user clearly**:
      > "🔔 **Ready for your review!**
      >
@@ -812,6 +1200,10 @@ If the user needs to end a session mid-work:
      > - 🔄 **'changes needed: {description}'** — I'll make the changes
      > - ❌ **'cancel'** — I'll stop and move the issue back to To-Do"
 
+   - **Kick off Phase 5B** (if `proactive_local_ci: true` in config):
+     - While waiting for user approval, proactively run local CI in the background.
+     - See [Phase 5B: Proactive Local CI](#phase-5b-proactive-local-ci-post-push) below.
+
 7. **Handle Response**
    - **Approved**: Proceed to Phase 6.
    - **Changes needed**: Go back to Phase 3, apply requested changes, re-run Phase 4, return here.
@@ -821,6 +1213,84 @@ If the user needs to end a session mid-work:
    - Update `current_phase: 5`, `phase_status: completed` (or `waiting_approval`).
    - Record `pr_url`, `pr_number` in state file.
    - If changes requested: set `phase_status: changes_requested`, update `remaining_work`.
+
+---
+
+## Phase 5B: Proactive Local CI (Post-Push)
+
+**Goal**: After pushing the branch and creating the PR, re-run quality gates locally — in parallel with GitHub Actions — to catch and fix issues **before** CI reports them.
+
+> This phase runs **only if** `proactive_local_ci: true` in config.
+> It runs **concurrently** while the agent waits for user approval in Phase 5.
+> It does **NOT block** the user from approving/rejecting at any time.
+
+### When This Runs
+
+- **Trigger**: Immediately after the PR is pushed in Phase 5, step 1.
+- **Concurrent with**: Phase 5's "Wait for Approval" checkpoint.
+- **State tracking**: `current_phase` stays at `5`, `sub_phase` is set to `"5B_proactive_ci"`.
+
+### Steps
+
+1. **Fetch Latest Base Branch**
+   ```bash
+   git fetch origin {base_branch}
+   ```
+
+2. **Check for Upstream Changes**
+   - Compare the feature branch against the latest base:
+     ```bash
+     git log {branch_name}..origin/{base_branch} --oneline
+     ```
+   - If there are new commits on base since the branch was created, the CI environment may differ from local. Note this.
+   - **Tell the user**: "🔄 Proactive CI: Checking for upstream changes..."
+
+3. **Re-Run Full Quality Suite**
+   - Run the same checks as Phase 4 (lint, test, build) using the **auto-fix loop** with `max_auto_fix_attempts`.
+   - Reset `auto_fix_attempts` counters for this phase (each phase gets fresh attempts).
+   - If any check fails and **auto-fix succeeds**:
+     - Commit the fix:
+       ```bash
+       git add {fixed_files}
+       git commit -m "fix({scope}): proactive CI auto-fix - {check_type}
+
+       Refs: {issue_id}"
+       ```
+     - Push to the branch (updates the PR automatically):
+       ```bash
+       git push origin {branch_name}
+       ```
+     - **Tell the user**: "✅ Proactive CI: Found and fixed a {check_type} issue. PR updated."
+   - If auto-fix **fails**:
+     - **Send email notification** (if `notify_on.ci_failure` is `true`):
+       - Use the **CI Failure** template from the Notification System section.
+     - **Tell the user** with full details and wait for guidance.
+
+4. **Monitor GitHub CI Status** (best effort)
+   - Periodically check PR status:
+     ```bash
+     gh pr view {pr_number} --json statusCheckRollup
+     ```
+   - If GitHub CI fails on something the agent did **not** catch locally:
+     - Fetch the CI logs if available via `gh pr checks {pr_number}`.
+     - Attempt auto-fix using the same loop.
+     - Push fixes if successful.
+   - If GitHub CI passes: **Tell the user**: "✅ Proactive CI: All GitHub checks passing."
+
+5. **Conflict Pre-Check**
+   - While monitoring, also check if the base branch has diverged:
+     ```bash
+     git fetch origin {base_branch}
+     git merge-base --is-ancestor origin/{base_branch} {branch_name}
+     ```
+   - If the base has new commits, warn the user that a rebase/merge may be needed in Phase 6.
+
+6. **📝 Update State File** _(State Management)_
+   - Record proactive CI results in `context`.
+   - Record any additional commits in `commits` list.
+   - Update `auto_fix_attempts` with results.
+   - Clear `sub_phase` back to `""` when Phase 5B completes.
+   - **Note**: `current_phase` remains `5` throughout (5B is a sub-phase).
 
 ---
 
@@ -858,15 +1328,135 @@ If the user needs to end a session mid-work:
        ```bash
        git push origin {branch_name} --force-with-lease
        ```
-   - If merge/rebase conflicts: **stop and ask user for help**.
+   - **If merge/rebase conflicts occur**:
+     - If `proactive_conflict_resolution: false` in config: **stop and ask user for help** (original behavior).
+     - If `proactive_conflict_resolution: true`: enter the **Conflict Resolution Algorithm** below.
    - **Config override**: If `prefer_merge_over_rebase: true` is set in config, always use merge instead of rebase.
+
+### Conflict Resolution Algorithm
+
+> Activated when `proactive_conflict_resolution: true` and a merge/rebase produces conflicts.
+> Set `sub_phase: "6_conflict_resolution"` in state file during this process.
+
+**Step 1: Identify Conflicting Files**
+```bash
+git diff --name-only --diff-filter=U
+```
+- Store the list in state `conflict_resolution.last_conflict_files`.
+- **Tell the user**: "🔀 Merge conflict detected in {N} files. Attempting auto-resolution..."
+
+**Step 2: Classify Each Conflict**
+
+For each conflicting file, read the conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) and classify:
+
+| Classification | Description | Auto-Resolvable? |
+|---------------|-------------|-------------------|
+| **Import ordering** | Both sides added/reordered imports | ✅ Yes |
+| **Whitespace/formatting** | Indentation, trailing whitespace, line endings | ✅ Yes |
+| **Non-overlapping additions** | Both sides added code to different sections of the same file | ✅ Yes |
+| **Lock file** (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`, etc.) | Dependency lock conflicts | ✅ Yes (regenerate) |
+| **Same-line modification** | Both sides changed the same lines of code | ⚠️ Attempt with context |
+| **Structural conflict** | File renamed/moved/deleted on one side, modified on the other | ❌ Escalate |
+
+**Step 3: Auto-Resolve Simple Conflicts**
+
+For each auto-resolvable conflict:
+
+- **Import ordering**: Accept both sets of imports. Sort them according to the project's convention (check existing files for import order patterns — e.g., external deps first, then internal, then relative).
+- **Whitespace/formatting**: Accept the feature branch version (our changes). Run `{lint_fix_command}` if configured to normalize.
+- **Non-overlapping additions**: Accept both changes (both sides of the conflict markers).
+- **Lock files**: Delete the conflicted lock file and regenerate:
+  ```bash
+  # Detect package manager and regenerate
+  rm package-lock.json 2>/dev/null && npm install
+  rm yarn.lock 2>/dev/null && yarn install
+  rm pnpm-lock.yaml 2>/dev/null && pnpm install
+  ```
+
+**Step 4: Attempt Intelligent Merge for Same-Line Conflicts**
+
+For same-line modifications:
+
+1. Read the **full file context** (not just the conflicted chunk).
+2. Read **both versions** — the base branch change and the feature branch change.
+3. Understand the **intent** of each change:
+   - Read the recent commit messages on both sides to understand what each change was trying to do.
+   - Is the base change a refactor? A bug fix? A new feature?
+   - Is the feature branch change more specific/targeted?
+4. **Resolution strategies** (try in order):
+   - If the base change is a broad refactor and our change is a targeted feature: apply the base change first, then re-apply our targeted change on top.
+   - If both changes modify the same function/method: merge the intent of both changes, keeping both behaviors.
+   - If the changes are logically contradictory: mark as **unresolvable** and escalate.
+5. After each resolution, verify the result makes syntactic sense by reading the full file.
+
+**Step 5: Verify Resolution**
+```bash
+# Stage resolved files
+git add {resolved_files}
+
+# Verify no remaining conflict markers in resolved files
+grep -rn "<<<<<<< " {resolved_files} && echo "CONFLICT MARKERS REMAIN" || echo "All conflicts resolved"
+```
+- If conflict markers remain: escalate the remaining files.
+
+**Step 6: Re-Run Quality Gates**
+
+After conflict resolution, re-run the **full Phase 4 quality gate** (lint, tests, build) with the auto-fix loop.
+- This ensures the merge did not introduce regressions.
+- Reset `auto_fix_attempts` counters for fresh attempts.
+
+**Step 7: Complete the Rebase/Merge**
+```bash
+# If rebasing:
+git rebase --continue
+
+# If merging:
+git commit   # merge commit is auto-created by git
+```
+
+**Step 8: Push Updated Branch**
+```bash
+git push origin {branch_name} --force-with-lease
+```
+- **Tell the user**: "✅ Resolved {N} merge conflicts automatically. Branch updated. Quality gates re-passed."
+
+**Step 9: Escalation**
+
+If any conflict is classified as unresolvable (structural, or ambiguous same-line):
+
+- **Tell the user** which files have unresolvable conflicts and why:
+  > "🚨 **Merge conflict requires manual resolution**
+  >
+  > **Auto-resolved**: {list of files resolved, if any}
+  > **Needs manual help**: {list of remaining conflicts}
+  >
+  > The conflicts in the following files are too ambiguous for me to resolve safely:
+  > - `{file1}`: {reason — e.g., "both sides modified the same function with different logic"}
+  > - `{file2}`: {reason — e.g., "file was renamed on base and modified on feature branch"}
+  >
+  > Please resolve these manually, then tell me to continue."
+
+- **Send email notification** (if `notify_on.conflict_escalation` is `true`):
+  - Use the **Conflict Escalation** template from the Notification System section.
+
+- **STOP and wait** for user to resolve manually.
+
+- After user resolves: verify resolution, re-run quality gates, push.
+
+**State Tracking**:
+- Update `conflict_resolution.attempts` after each resolution attempt.
+- Update `conflict_resolution.last_conflict_files` with the file list.
+- Update `conflict_resolution.auto_resolved` (`true` if ALL conflicts resolved automatically).
+- Update `conflict_resolution.escalated_to_user` (`true` if any conflict required human help).
+- Update `conflict_resolution.resolution_notes` with a summary of what was done.
+- Clear `sub_phase` back to `""` when conflict resolution completes.
 
 3. **Verify PR Status**
    ```bash
    gh pr view --json state,statusCheckRollup,url
    ```
    - Report CI status to user.
-   - If CI fails: investigate and fix, or ask user.
+   - If CI fails: attempt auto-fix using Phase 4's auto-fix loop. If still failing, ask user.
 
 4. **Get Deployment URL** (if applicable)
    - For Vercel/Netlify: check for preview deployment URL in PR checks.
@@ -1072,13 +1662,18 @@ If the user needs to end a session mid-work:
 | GitHub CLI not authenticated | Stop. Ask user to run `gh auth login`. |
 | Config file missing | Create from template. Ask user to fill in. |
 | Base branch detection fails | Ask user to specify in config. |
-| Merge/rebase conflicts | Stop. Show conflicts. Ask user for resolution. |
-| Tests fail | Analyze. Fix if related to changes. Ask user if unclear. |
-| Build fails | Analyze. Fix if possible. Ask user if unclear. |
+| Merge/rebase conflicts | If `proactive_conflict_resolution: true`: auto-resolve simple conflicts (imports, whitespace, non-overlapping, lock files), attempt intelligent merge for same-line conflicts. Escalate only genuinely ambiguous or structural conflicts. If `false`: stop and ask user (original behavior). |
+| Tests fail | **Auto-fix loop**: up to `max_auto_fix_attempts` (default 3). Attempt 1: trace to recent changes. Attempt 2: deep analysis. Attempt 3: alternative approach. Only escalate to user after all attempts exhausted. If `max_auto_fix_attempts: 0`: ask user immediately (original behavior). |
+| Build fails | **Auto-fix loop**: up to `max_auto_fix_attempts`. Parse errors, fix imports/types/references. Only escalate after exhausting attempts. |
+| Lint fails | **Auto-fix loop**: run `lint_fix_command` first, then manual analysis. Escalate after max attempts. |
 | Issue has no description | Ask user for requirements before planning. |
 | Network/API errors | Retry once. If still failing, report to user. |
 | Linear API rate limit (429) | Exponential backoff: 1s → 2s → 4s → 8s. Max 3 retries. Report if still failing. |
 | Screenshot capture fails | Log warning, continue without screenshots. Never block PR creation. |
+| Email notification fails | Log warning, continue workflow. Never block on notification failure. Linear comments still serve as fallback notification. |
+| Auto-fix creates new errors | Count toward `max_auto_fix_attempts`. If oscillation detected (same error reappears after being "fixed"), escalate immediately rather than retrying. |
+| Conflict resolution introduces test failures | Re-run Phase 4 quality gate with auto-fix loop. If that also fails, escalate to user. |
+| msmtp not configured | If `notification_email` is set but msmtp fails, warn user in Phase 0 and suggest setup steps. Continue without notifications. |
 
 ---
 

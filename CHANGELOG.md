@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-02-27
+
+### Added
+- **Email notifications**: Configurable email alerts via msmtp/sendmail/mail/custom script when human attention is required
+- **Email notifications**: Gmail SMTP setup guide with msmtp in SKILL.md
+- **Email notifications**: Notifications at Phase 2 (plan approval), Phase 5 (review approval), error escalation, conflict escalation, CI failure
+- **Email notifications**: `notification_email`, `notification_method`, `notification_script`, `notify_on.*` config fields
+- **Auto error resolution**: Structured retry loop for lint, test, and build failures (up to `max_auto_fix_attempts`, default 3)
+- **Auto error resolution**: Progressive fix strategies per check type (auto-fix command → manual analysis → pattern matching)
+- **Auto error resolution**: Oscillation detection prevents infinite fix-undo loops
+- **Auto error resolution**: `max_auto_fix_attempts`, `lint_fix_command` config fields
+- **Proactive local CI**: New Phase 5B runs quality gates locally after PR push, in parallel with GitHub Actions
+- **Proactive local CI**: Auto-fixes issues before GH CI reports them, pushes fixes to update PR
+- **Proactive local CI**: Monitors GitHub CI status and addresses failures proactively
+- **Proactive local CI**: `proactive_local_ci` config field
+- **Conflict resolution**: Automatic classification of merge conflicts (imports, whitespace, non-overlapping, lock files, same-line, structural)
+- **Conflict resolution**: Auto-resolves simple conflicts (import ordering, whitespace, lock file regeneration)
+- **Conflict resolution**: Intelligent merge attempts for same-line modifications using commit context
+- **Conflict resolution**: Quality gates re-run after conflict resolution to catch regressions
+- **Conflict resolution**: `proactive_conflict_resolution` config field
+- **State tracking**: `auto_fix_attempts`, `conflict_resolution`, `notifications_sent`, `sub_phase` fields in state schema
+- **Phase 2 checkpoint**: Formalized as a proper STOP-and-wait checkpoint with email notification (was previously auto-proceeding)
+
+### Changed
+- **Phase 4**: Completely rewritten with auto-fix loop — agent tries up to 3 fix strategies before escalating to user
+- **Phase 5**: Added email notification trigger at the approval checkpoint
+- **Phase 6**: Conflict handling upgraded from "stop and ask" to automatic resolution algorithm
+- **Error handling table**: Updated all failure scenarios to reflect auto-fix behavior
+- **Lifecycle diagram**: Updated to show Phase 5B, conflict resolution, and notification points
+- **Workflow file**: Updated step descriptions to reflect new capabilities
+- **README**: Updated with new config fields, features, and setup instructions
+- **Config template**: Expanded from 115 to 165+ lines with notification and auto-resolution sections
+
 ## [1.1.0] - 2026-02-27
 
 ### Added
