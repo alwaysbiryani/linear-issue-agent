@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-03-02
+
+### Added
+- **Interactive setup script**: `setup.sh` guides through entire setup in one command
+- **Setup wizard**: Copies agent files, configures Linear project/team, sets up optional commands
+- **Auto-installs msmtp**: Detects OS (macOS/Linux) and offers to install msmtp automatically
+- **Auto-generates msmtprc**: Creates `~/.msmtprc` with correct Gmail SMTP config, sets permissions
+- **App Password helper**: Opens Google App Password page in browser during setup
+- **Test email**: Sends verification email during setup to confirm notifications work
+- **Gitignore management**: Auto-adds `.agents/state/` to target project's `.gitignore`
+
+### Changed
+- **README**: Simplified setup section — single `./setup.sh` command replaces 4 manual steps
+- **README**: Manual setup preserved in collapsible `<details>` block as fallback
+
 ## [1.2.0] - 2026-02-27
 
 ### Added

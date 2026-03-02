@@ -1,8 +1,8 @@
 # 🤖 Linear Issue Agent
 
-![Version](https://img.shields.io/badge/version-1.2.0-blue)
+![Version](https://img.shields.io/badge/version-1.3.0-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Last Updated](https://img.shields.io/badge/last_updated-2026--02--27-brightgreen)
+![Last Updated](https://img.shields.io/badge/last_updated-2026--03--02-brightgreen)
 
 An autonomous AI agent skill that bridges **Linear** (project management) and **GitHub** (code & deployment). It picks up To-Do issues, plans, implements, tests, and deploys — with full transparency, human-in-the-loop approval gates, **email notifications**, **auto error resolution**, **proactive CI testing**, and **automatic conflict resolution**.
 
@@ -29,19 +29,34 @@ To-Do Issue → Plan → Implement → Test → Review → Deploy → Close
 
 ## Setup
 
-### 1. Copy into your project
-
-Copy the `.agents/` directory into your project root:
+### Quick Setup (Recommended)
 
 ```bash
 # Clone this repo
 git clone git@github.com:alwaysbiryani/linear-issue-agent.git
+cd linear-issue-agent
 
-# Copy the agent files into your project
+# Run the interactive setup wizard
+./setup.sh /path/to/your/project
+```
+
+The setup wizard guides you through everything:
+1. **Copies agent files** into your project
+2. **Configures Linear** — project name, team, and optional commands
+3. **Sets up email notifications** — installs msmtp, configures Gmail SMTP, sends test email
+
+Then just open your project in your AI IDE and run `/linear-agent` or say "Work on my Linear issues".
+
+<details>
+<summary><b>Manual Setup</b> (if you prefer not to use the wizard)</summary>
+
+#### 1. Copy into your project
+
+```bash
 cp -r linear-issue-agent/.agents/ /path/to/your/project/.agents/
 ```
 
-### 2. Configure for your project
+#### 2. Configure for your project
 
 ```bash
 # Copy the config template
@@ -54,7 +69,7 @@ cp .agents/skills/linear-agent/config.template.yml .agents/config/linear-agent.y
 #   - notification_email: "your@gmail.com"  (optional but recommended)
 ```
 
-### 3. Set up email notifications (optional)
+#### 3. Set up email notifications (optional)
 
 ```bash
 # Install msmtp
@@ -67,11 +82,13 @@ brew install msmtp
 echo "test" | msmtp your@gmail.com
 ```
 
-### 4. Run
+#### 4. Run
 
 Use the `/linear-agent` slash command in your AI IDE, or just ask:
 
 > "Work on my Linear issues"
+
+</details>
 
 ## Supported IDEs
 
